@@ -11,9 +11,15 @@ const app = {
     data: {
         posts: []
     },
+    // ★★★ データベース参照を格納するプロパティ ★★★
+    db: null,
 
     // 初期化
     async init() {
+        // ★★★ 修正済み: グローバルな database 変数を app.db として格納 ★★★
+        // (firebase-config.jsで定義されたグローバル変数 'database' を参照)
+        this.db = database;
+        
         this.loadTheme();
         await this.loadData();
         
@@ -29,8 +35,8 @@ const app = {
 
     // リアルタイム更新リスナー
     setupRealtimeListeners() {
-        // 投稿の変更を監視
-        database.ref('posts').on('value', (snapshot) => {
+        // 投稿の変更を監視 (database.ref → this.db.ref に変更)
+        this.db.ref('posts').on('value', (snapshot) => {
             const posts = [];
             snapshot.forEach((childSnapshot) => {
                 posts.push(childSnapshot.val());
@@ -48,8 +54,8 @@ const app = {
             }
         });
 
-        // いいねの変更を監視
-        database.ref('likes').on('value', (snapshot) => {
+        // いいねの変更を監視 (database.ref → this.db.ref に変更)
+        this.db.ref('likes').on('value', (snapshot) => {
             this.likes = snapshot.val() || {};
             if (this.currentPage === 'home') {
                 this.renderHome();
@@ -388,7 +394,8 @@ const app = {
                         body,
                         updatedAt: new Date().toISOString()
                     };
-                    await database.ref('posts/' + this.currentEditId).set(updatedPost);
+                    // database.ref → this.db.ref に変更
+                    await this.db.ref('posts/' + this.currentEditId).set(updatedPost);
                     this.showToast('投稿を更新しました', 'success');
                 }
             } else {
@@ -401,7 +408,8 @@ const app = {
                     updatedAt: new Date().toISOString(),
                     comments: []
                 };
-                await database.ref('posts/' + newPost.id).set(newPost);
+                // database.ref → this.db.ref に変更
+                await this.db.ref('posts/' + newPost.id).set(newPost);
                 this.showToast('投稿を保存しました', 'success');
             }
             this.goHome();
@@ -479,8 +487,9 @@ const app = {
     // 削除確認
     async confirmDelete() {
         try {
-            await database.ref('posts/' + this.currentPostId).remove();
-            await database.ref('likes/' + this.currentPostId).remove();
+            // database.ref → this.db.ref に変更
+            await this.db.ref('posts/' + this.currentPostId).remove();
+            await this.db.ref('likes/' + this.currentPostId).remove();
             this.closeModal();
             this.showToast('投稿を削除しました', 'success');
             this.goHome();
@@ -502,9 +511,11 @@ const app = {
             const newLikes = currentLikes > 0 ? 0 : 1;
             
             if (newLikes > 0) {
-                await database.ref('likes/' + this.currentPostId).set(newLikes);
+                // database.ref → this.db.ref に変更
+                await this.db.ref('likes/' + this.currentPostId).set(newLikes);
             } else {
-                await database.ref('likes/' + this.currentPostId).remove();
+                // database.ref → this.db.ref に変更
+                await this.db.ref('likes/' + this.currentPostId).remove();
             }
         } catch (error) {
             console.error('いいねエラー:', error);
@@ -536,7 +547,8 @@ const app = {
                 createdAt: new Date().toISOString()
             });
 
-            await database.ref('posts/' + this.currentPostId + '/comments').set(comments);
+            // database.ref → this.db.ref に変更
+            await this.db.ref('posts/' + this.currentPostId + '/comments').set(comments);
             
             nameInput.value = '';
             bodyInput.value = '';
@@ -555,7 +567,8 @@ const app = {
                 try {
                     const comments = [...post.comments];
                     comments.splice(index, 1);
-                    await database.ref('posts/' + postId + '/comments').set(comments);
+                    // database.ref → this.db.ref に変更
+                    await this.db.ref('posts/' + postId + '/comments').set(comments);
                     this.showToast('コメントを削除しました', 'success');
                 } catch (error) {
                     console.error('コメント削除エラー:', error);
@@ -602,8 +615,8 @@ const app = {
     // データ読み込み（Firebase）
     async loadData() {
         try {
-            // 投稿読み込み
-            const postsSnapshot = await database.ref('posts').once('value');
+            // 投稿読み込み (database.ref → this.db.ref に変更)
+            const postsSnapshot = await this.db.ref('posts').once('value');
             const posts = [];
             postsSnapshot.forEach((childSnapshot) => {
                 posts.push(childSnapshot.val());
@@ -611,8 +624,8 @@ const app = {
             posts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
             this.data.posts = posts;
 
-            // いいね読み込み
-            const likesSnapshot = await database.ref('likes').once('value');
+            // いいね読み込み (database.ref → this.db.ref に変更)
+            const likesSnapshot = await this.db.ref('likes').once('value');
             this.likes = likesSnapshot.val() || {};
         } catch (error) {
             console.error('データ読み込みエラー:', error);
