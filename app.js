@@ -16,11 +16,47 @@ const app = {
     async init() {
         this.loadTheme();
         await this.loadData();
+        
+        // リアルタイム更新のリスナーを設定
+        this.setupRealtimeListeners();
+        
         document.getElementById('loading').style.display = 'none';
         document.getElementById('mainContainer').style.display = 'block';
         this.render();
         window.addEventListener('hashchange', () => this.handleRoute());
         this.handleRoute();
+    },
+
+    // リアルタイム更新リスナー
+    setupRealtimeListeners() {
+        // 投稿の変更を監視
+        database.ref('posts').on('value', (snapshot) => {
+            const posts = [];
+            snapshot.forEach((childSnapshot) => {
+                posts.push(childSnapshot.val());
+            });
+            posts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+            this.data.posts = posts;
+            
+            if (this.currentPage === 'home') {
+                this.renderHome();
+            } else if (this.currentPage === 'detail') {
+                const currentPost = posts.find(p => p.id === this.currentPostId);
+                if (currentPost) {
+                    this.renderDetail();
+                }
+            }
+        });
+
+        // いいねの変更を監視
+        database.ref('likes').on('value', (snapshot) => {
+            this.likes = snapshot.val() || {};
+            if (this.currentPage === 'home') {
+                this.renderHome();
+            } else if (this.currentPage === 'detail') {
+                this.renderDetail();
+            }
+        });
     },
 
     // ルーティング処理
@@ -341,32 +377,38 @@ const app = {
 
         if (!isValid) return;
 
-        if (this.currentEditId) {
-            const post = this.data.posts.find(p => p.id === this.currentEditId);
-            if (post) {
-                post.name = name;
-                post.title = title;
-                post.body = body;
-                post.updatedAt = new Date().toISOString();
-                await this.savePost(post);
-                this.showToast('投稿を更新しました', 'success');
+        try {
+            if (this.currentEditId) {
+                const post = this.data.posts.find(p => p.id === this.currentEditId);
+                if (post) {
+                    const updatedPost = {
+                        ...post,
+                        name,
+                        title,
+                        body,
+                        updatedAt: new Date().toISOString()
+                    };
+                    await database.ref('posts/' + this.currentEditId).set(updatedPost);
+                    this.showToast('投稿を更新しました', 'success');
+                }
+            } else {
+                const newPost = {
+                    id: Date.now().toString(),
+                    name,
+                    title,
+                    body,
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString(),
+                    comments: []
+                };
+                await database.ref('posts/' + newPost.id).set(newPost);
+                this.showToast('投稿を保存しました', 'success');
             }
-        } else {
-            const newPost = {
-                id: Date.now().toString(),
-                name,
-                title,
-                body,
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString(),
-                comments: []
-            };
-            await this.savePost(newPost);
-            this.showToast('投稿を保存しました', 'success');
+            this.goHome();
+        } catch (error) {
+            console.error('投稿エラー:', error);
+            this.showToast('投稿に失敗しました', 'error');
         }
-
-        await this.loadData();
-        this.goHome();
     },
 
     // エラー表示
@@ -437,10 +479,8 @@ const app = {
     // 削除確認
     async confirmDelete() {
         try {
-            await window.storage.delete(`post:${this.currentPostId}`, true);
-            await window.storage.delete(`like:${this.currentPostId}`, true);
-            delete this.likes[this.currentPostId];
-            await this.loadData();
+            await database.ref('posts/' + this.currentPostId).remove();
+            await database.ref('likes/' + this.currentPostId).remove();
             this.closeModal();
             this.showToast('投稿を削除しました', 'success');
             this.goHome();
@@ -457,23 +497,19 @@ const app = {
 
     // いいねトグル
     async toggleLike() {
-        const currentLikes = this.likes[this.currentPostId] || 0;
-        const newLikes = currentLikes > 0 ? 0 : 1;
-        
-        this.likes[this.currentPostId] = newLikes;
-        
         try {
+            const currentLikes = this.likes[this.currentPostId] || 0;
+            const newLikes = currentLikes > 0 ? 0 : 1;
+            
             if (newLikes > 0) {
-                await window.storage.set(`like:${this.currentPostId}`, newLikes.toString(), true);
+                await database.ref('likes/' + this.currentPostId).set(newLikes);
             } else {
-                await window.storage.delete(`like:${this.currentPostId}`, true);
-                delete this.likes[this.currentPostId];
+                await database.ref('likes/' + this.currentPostId).remove();
             }
         } catch (error) {
-            console.error('いいね保存エラー:', error);
+            console.error('いいねエラー:', error);
+            this.showToast('いいねに失敗しました', 'error');
         }
-        
-        this.renderDetail();
     },
 
     // コメント追加
@@ -492,26 +528,23 @@ const app = {
         const post = this.data.posts.find(p => p.id === this.currentPostId);
         if (!post) return;
 
-        if (!post.comments) {
-            post.comments = [];
+        try {
+            const comments = post.comments || [];
+            comments.push({
+                name,
+                body,
+                createdAt: new Date().toISOString()
+            });
+
+            await database.ref('posts/' + this.currentPostId + '/comments').set(comments);
+            
+            nameInput.value = '';
+            bodyInput.value = '';
+            this.showToast('コメントを追加しました', 'success');
+        } catch (error) {
+            console.error('コメント追加エラー:', error);
+            this.showToast('コメントの追加に失敗しました', 'error');
         }
-
-        post.comments.push({
-            name,
-            body,
-            createdAt: new Date().toISOString()
-        });
-
-        await this.savePost(post);
-        await this.loadData();
-        
-        const refreshedPost = this.data.posts.find(p => p.id === this.currentPostId);
-        this.currentPostId = refreshedPost.id;
-        
-        nameInput.value = '';
-        bodyInput.value = '';
-        this.showToast('コメントを追加しました', 'success');
-        this.renderDetail();
     },
 
     // コメント削除
@@ -519,11 +552,15 @@ const app = {
         if (confirm('このコメントを削除しますか？')) {
             const post = this.data.posts.find(p => p.id === postId);
             if (post && post.comments) {
-                post.comments.splice(index, 1);
-                await this.savePost(post);
-                await this.loadData();
-                this.showToast('コメントを削除しました', 'success');
-                this.renderDetail();
+                try {
+                    const comments = [...post.comments];
+                    comments.splice(index, 1);
+                    await database.ref('posts/' + postId + '/comments').set(comments);
+                    this.showToast('コメントを削除しました', 'success');
+                } catch (error) {
+                    console.error('コメント削除エラー:', error);
+                    this.showToast('コメントの削除に失敗しました', 'error');
+                }
             }
         }
     },
@@ -562,61 +599,24 @@ const app = {
         return text.replace(/[&<>"']/g, m => map[m]);
     },
 
-    // データ読み込み（共有ストレージを使用）
+    // データ読み込み（Firebase）
     async loadData() {
         try {
-            // 投稿データを読み込み
-            const postsResult = await window.storage.list('post:', true);
-            if (postsResult && postsResult.keys) {
-                const loadedPosts = [];
-                for (const key of postsResult.keys) {
-                    try {
-                        const result = await window.storage.get(key, true);
-                        if (result && result.value) {
-                            const post = JSON.parse(result.value);
-                            loadedPosts.push(post);
-                        }
-                    } catch (err) {
-                        console.log('投稿読み込みエラー:', key);
-                    }
-                }
-                // 新しい順にソート
-                loadedPosts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-                this.data.posts = loadedPosts;
-            }
+            // 投稿読み込み
+            const postsSnapshot = await database.ref('posts').once('value');
+            const posts = [];
+            postsSnapshot.forEach((childSnapshot) => {
+                posts.push(childSnapshot.val());
+            });
+            posts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+            this.data.posts = posts;
 
-            // いいね数を読み込み
-            const likesResult = await window.storage.list('like:', true);
-            if (likesResult && likesResult.keys) {
-                const loadedLikes = {};
-                for (const key of likesResult.keys) {
-                    try {
-                        const result = await window.storage.get(key, true);
-                        if (result && result.value) {
-                            const postId = key.replace('like:', '');
-                            loadedLikes[postId] = parseInt(result.value) || 0;
-                        }
-                    } catch (err) {
-                        console.log('いいね読み込みエラー:', key);
-                    }
-                }
-                this.likes = loadedLikes;
-            }
+            // いいね読み込み
+            const likesSnapshot = await database.ref('likes').once('value');
+            this.likes = likesSnapshot.val() || {};
         } catch (error) {
             console.error('データ読み込みエラー:', error);
             this.showToast('データの読み込みに失敗しました', 'error');
-        }
-    },
-
-    // 投稿保存（共有ストレージを使用）
-    async savePost(post) {
-        try {
-            await window.storage.set(`post:${post.id}`, JSON.stringify(post), true);
-            return true;
-        } catch (error) {
-            console.error('投稿保存エラー:', error);
-            this.showToast('投稿の保存に失敗しました', 'error');
-            return false;
         }
     },
 
